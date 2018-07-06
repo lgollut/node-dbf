@@ -1,4 +1,5 @@
 import fs from "fs";
+import iconv from "iconv-lite";
 
 export default class Header {
   constructor(filename, encoding) {
@@ -10,7 +11,7 @@ export default class Header {
     fs.readFile(this.filename, (err, buffer) => {
       if (err) throw err;
 
-      this.type = buffer.slice(0, 1).toString(this.encoding);
+      this.type = iconv.decode(buffer.slice(0, 1), this.encoding);
       this.dateUpdated = this.parseDate(buffer.slice(1, 4));
       this.numberOfRecords = this.convertBinaryToInteger(buffer.slice(4, 8));
       this.start = this.convertBinaryToInteger(buffer.slice(8, 10));
@@ -37,11 +38,10 @@ export default class Header {
 
   parseFieldSubRecord(buffer) {
     return {
-      name: buffer
-        .slice(0, 11)
-        .toString(this.encoding)
+      name: iconv
+        .decode(buffer.slice(0, 11), this.encoding)
         .replace(/[\u0000]+$/, ""),
-      type: buffer.slice(11, 12).toString(this.encoding),
+      type: iconv.decode(buffer.slice(11, 12), this.encoding),
       displacement: this.convertBinaryToInteger(buffer.slice(12, 16)),
       length: this.convertBinaryToInteger(buffer.slice(16, 17)),
       decimalPlaces: this.convertBinaryToInteger(buffer.slice(17, 18))
