@@ -1,117 +1,150 @@
-import fs from 'fs';
-import { EventEmitter } from 'events';
+import fs from "fs";
+import { EventEmitter } from "events";
+import iconv from "iconv-lite";
 
-import Header from './header';
+import Header from "./header";
 
 export default class Parser extends EventEmitter {
+  constructor(filename, options) {
+    super();
 
-    constructor(filename, options) {
-        super();
+    this.filename = filename;
+    this.options = options || {};
+    this.encoding = this.options.encoding || "utf-8";
+  }
 
-        this.filename = filename;
-        this.options = options || {};
-        this.encoding = this.options.encoding || 'utf-8';
-    }
+  parse() {
+    this.emit("start", this);
 
-    parse() {
-        this.emit('start', this);
+    this.header = new Header(this.filename, this.encoding);
+    this.header.parse(err => {
+      this.emit("header", this.header);
 
-        this.header = new Header(this.filename, this.encoding);
-        this.header.parse(err => {
+      let sequenceNumber = 0;
 
-            this.emit('header', this.header);
+      let loc = this.header.start;
+      let bufLoc = this.header.start;
+      let overflow = null;
+      this.paused = false;
 
-            let sequenceNumber = 0;
+      const stream = fs.createReadStream(this.filename);
 
-            let loc = this.header.start;
-            let bufLoc = this.header.start;
-            let overflow = null;
-            this.paused = false;
-
-            const stream = fs.createReadStream(this.filename);
-
-            this.readBuf = () => {
-
-                let buffer;
-                if (this.paused) {
-                    this.emit('paused');
-                    return;
-                }
-
-                while ((buffer = stream.read())) {
-                    if (bufLoc !== this.header.start) { bufLoc = 0; }
-                    if (overflow !== null) { buffer = overflow + buffer; }
-
-                    while ((loc < (this.header.start + (this.header.numberOfRecords * this.header.recordLength))) && ((bufLoc + this.header.recordLength) <= buffer.length)) {
-                        this.emit('record', this.parseRecord(++sequenceNumber, buffer.slice(bufLoc, (bufLoc += this.header.recordLength))));
-                    }
-
-                    loc += bufLoc;
-                    if (bufLoc < buffer.length) { overflow = buffer.slice(bufLoc, buffer.length); } else { overflow = null; }
-
-                    return this;
-                }
-            };
-
-            stream.on('readable',this.readBuf);
-            return stream.on('end', () => {
-                return this.emit('end');
-            });
-        });
-
-        return this;
-    }
-
-    pause() {
-        return this.paused = true;
-    }
-
-    resume() {
-        this.paused = false;
-        this.emit('resuming');
-        return (this.readBuf)();
-    }
-
-    parseRecord(sequenceNumber, buffer) {
-        const record = {
-            '@sequenceNumber': sequenceNumber,
-            '@deleted': [42,'*'].includes((buffer.slice(0, 1))[0])
-        };
-
-        let loc = 1;
-        for (let field of Array.from(this.header.fields)) {
-            (field => {
-                return record[field.name] = this.parseField(field, buffer.slice(loc, (loc += field.length)));
-            })(field);
+      this.readBuf = () => {
+        let buffer;
+        if (this.paused) {
+          this.emit("paused");
+          return;
         }
 
-        return record;
-    }
+        while ((buffer = stream.read())) {
+          if (bufLoc !== this.header.start) {
+            bufLoc = 0;
+          }
+          if (overflow !== null) {
+            buffer = overflow + buffer;
+          }
 
-    parseField(field, buffer) {
-        let value = (buffer.toString(this.encoding)).trim();
+          while (
+            loc <
+              this.header.start +
+                this.header.numberOfRecords * this.header.recordLength &&
+            bufLoc + this.header.recordLength <= buffer.length
+          ) {
+            this.emit(
+              "record",
+              this.parseRecord(
+                ++sequenceNumber,
+                buffer.slice(bufLoc, (bufLoc += this.header.recordLength))
+              )
+            );
+          }
 
-        if (field.type === 'C') { // Character
-            value = value;
-        } else if (field.type === 'F') { // Floating Point
-            value = (value === +value) && (value === (value | 0)) ? parseInt(value, 10) : parseFloat(value, 10);
-        } else if (field.type == 'L') { // Logical
-            switch (value) {
-                case (['Y', 'y', 'T', 't'].includes(value)):
-                    value = true;
-                    break;
-                case (['N', 'n', 'F', 'f'].includes(value)):
-                    value = false;
-                    break;
-                default:
-                    value = null;
-            }
-        } else if (field.type === 'M') { // Memo
-            value = value;
-        } else if (field.type === 'N') { // Numeric
-            value = value === +value && value === (value|0) ? parseInt(value) : parseFloat(value, 10);
+          loc += bufLoc;
+          if (bufLoc < buffer.length) {
+            overflow = buffer.slice(bufLoc, buffer.length);
+          } else {
+            overflow = null;
+          }
+
+          return this;
         }
+      };
 
-        return value;
+      stream.on("readable", this.readBuf);
+      return stream.on("end", () => {
+        return this.emit("end");
+      });
+    });
+
+    return this;
+  }
+
+  pause() {
+    return (this.paused = true);
+  }
+
+  resume() {
+    this.paused = false;
+    this.emit("resuming");
+    return this.readBuf();
+  }
+
+  parseRecord(sequenceNumber, buffer) {
+    const record = {
+      "@sequenceNumber": sequenceNumber,
+      "@deleted": [42, "*"].includes(buffer.slice(0, 1)[0])
+    };
+
+    let loc = 1;
+    for (let field of Array.from(this.header.fields)) {
+      (field => {
+        return (record[field.name] = this.parseField(
+          field,
+          buffer.slice(loc, (loc += field.length))
+        ));
+      })(field);
     }
+
+    return record;
+  }
+
+  parseField(field, buffer) {
+    let value = iconv
+      .decode(buffer, this.encoding)
+      .replace(/^\x20+|\x20+$/g, "");
+
+    if (field.type === "C") {
+      // Character
+      value = value;
+    } else if (field.type === "F") {
+      // Floating Point
+      value =
+        value === +value && value === (value | 0)
+          ? parseInt(value, 10)
+          : parseFloat(value, 10);
+    } else if (field.type == "L") {
+      // Logical
+      switch (value) {
+        case ["Y", "y", "T", "t"].includes(value):
+          value = true;
+          break;
+        case ["N", "n", "F", "f"].includes(value):
+          value = false;
+          break;
+        default:
+          value = null;
+      }
+    } else if (field.type === "M") {
+      // Memo
+      value = value;
+    } else if (field.type === "N") {
+      // Numeric
+      value =
+        value === +value && value === (value | 0)
+          ? parseInt(value)
+          : parseFloat(value, 10);
+    }
+
+    return value;
+  }
 }
