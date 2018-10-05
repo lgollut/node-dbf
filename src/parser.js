@@ -41,7 +41,7 @@ export default class Parser extends EventEmitter {
             bufLoc = 0;
           }
           if (overflow !== null) {
-            buffer = overflow + buffer;
+            buffer = Buffer.concat([overflow, buffer]);
           }
 
           while (
